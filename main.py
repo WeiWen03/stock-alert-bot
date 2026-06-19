@@ -115,8 +115,8 @@ def catalyst(symbol: str) -> str:
     except Exception:
         news = []
     if not news:
-        return "No major headline found"
-    title = news[0].get("title") or news[0].get("content", {}).get("title") or "Recent headline available"
+        return "未找到明显新闻催化"
+    title = news[0].get("title") or news[0].get("content", {}).get("title") or "有最新相关新闻"
     return title[:140]
 
 
@@ -155,31 +155,32 @@ def analyze(symbol: str) -> Candidate | None:
     rvol = relative_volume(symbol, avg_volume)
     headline = catalyst(symbol)
     score = min(45, int(abs(pct_change) * 7)) + min(40, int(rvol * 180))
-    if headline != "No major headline found":
+    if headline != "未找到明显新闻催化":
         score += 15
     score = min(score, 100)
     return Candidate(symbol, price, pct_change, rvol, headline, risk(pct_change, rvol), direction(pct_change, rvol), grade(score), score)
 
 
 def format_message(candidates: list[Candidate]) -> str:
-    now = dt.datetime.now(PACIFIC).strftime("%a %b %d, %Y %I:%M %p PT")
+    now = dt.datetime.now(PACIFIC).strftime("%Y-%m-%d %I:%M %p PT")
     lines = [
-        "**Daily Options Watchlist**",
+        "**每日短线期权观察名单**",
         f"`{now}`",
         "",
-        "For intraday and short-term options watch only. Not financial advice.",
+        "仅供盘中/短线期权观察使用，不构成投资建议，不自动交易，不下单。",
         "",
     ]
     if not candidates:
-        lines.append("No strong candidates found today.")
+        lines.append("今天暂时没有筛选出强候选标的。")
         return "\n".join(lines)
 
-    labels = {"Call": "[CALL]", "Put": "[PUT]", "Watch": "[WATCH]"}
+    direction_labels = {"Call": "看涨 / Call", "Put": "看跌 / Put", "Watch": "观察 / Watch"}
+    risk_labels = {"High": "高", "Medium": "中", "Low": "低"}
     for i, item in enumerate(candidates, 1):
         lines += [
-            f"**{i}. {item.ticker} | {item.grade} | {labels[item.direction]} | Risk: {item.risk}**",
-            f"Price: `${item.price:.2f}` | Change: `{fmt_pct(item.pct_change)}` | RVOL: `{item.rvol:.2f}`",
-            f"Catalyst: {item.catalyst}",
+            f"**{i}. {item.ticker} | 评级: {item.grade} | 方向: {direction_labels[item.direction]} | 风险: {risk_labels[item.risk]}**",
+            f"价格: `${item.price:.2f}` | 涨跌幅: `{fmt_pct(item.pct_change)}` | 相对成交量RVOL: `{item.rvol:.2f}`",
+            f"催化/新闻: {item.catalyst}",
             "",
         ]
     return "\n".join(lines).strip()
@@ -194,11 +195,11 @@ def post_discord(webhook_url: str, content: str) -> None:
 def main() -> int:
     webhook_url = env("DISCORD_WEBHOOK_URL")
     if not webhook_url:
-        print("DISCORD_WEBHOOK_URL is required.", file=sys.stderr)
+        print("缺少 DISCORD_WEBHOOK_URL。", file=sys.stderr)
         return 2
 
     if env("SKIP_TRADING_DAY_CHECK", "false").lower() not in {"1", "true", "yes"} and not is_trading_day():
-        print("Not a U.S. trading day. Skipping.")
+        print("今天不是美股交易日，跳过。")
         return 0
 
     ticker_text = env("WATCHLIST_TICKERS", ",".join(DEFAULT_TICKERS))
@@ -217,7 +218,7 @@ def main() -> int:
     candidates.sort(key=lambda c: (c.score, abs(c.pct_change), c.rvol), reverse=True)
     selected = candidates[:max_results]
     post_discord(webhook_url, format_message(selected))
-    print(f"Sent {len(selected)} candidates: {', '.join(c.ticker for c in selected) or 'none'}")
+    print(f"已发送 {len(selected)} 个候选标的: {', '.join(c.ticker for c in selected) or '无'}")
     return 0
 
 
