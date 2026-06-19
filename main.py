@@ -12,9 +12,12 @@ import yfinance as yf
 PACIFIC = ZoneInfo("America/Los_Angeles")
 EASTERN = ZoneInfo("America/New_York")
 
-DEFAULT_TICKERS = [
-    "SPY", "QQQ", "IWM", "AAPL", "MSFT", "NVDA", "AMD", "TSLA", "META", "AMZN",
-    "GOOGL", "NFLX", "AVGO", "COIN", "MSTR", "PLTR", "SMCI", "HOOD", "SHOP", "BABA",
+FIXED_TICKERS = ["SPY", "NVDA", "TSLA", "SOFI"]
+
+DEFAULT_MOVER_TICKERS = [
+    "QQQ", "IWM", "AAPL", "MSFT", "AMD", "META", "AMZN", "GOOGL", "NFLX", "AVGO",
+    "COIN", "MSTR", "PLTR", "SMCI", "HOOD", "SHOP", "BABA", "RIVN", "LCID", "MARA",
+    "RIOT", "AFRM", "SNOW", "CRWD", "UBER", "NIO", "XPEV", "MRVL", "MU", "ARM",
 ]
 
 MARKET_HOLIDAYS = {
@@ -37,6 +40,7 @@ class Candidate:
     direction: str
     grade: str
     score: int
+    reason: str
 
 
 def env(name: str, default: str = "") -> str:
@@ -82,8 +86,12 @@ def price_snapshot(symbol: str) -> tuple[float, float, float]:
     except Exception:
         pass
 
-    history = ticker.history(period="3mo", interval="1d", auto_adjust=False)
-    if not history.empty:
+    try:
+        history = ticker.history(period="3mo", interval="1d", auto_adjust=False)
+    except Exception:
+        history = None
+
+    if history is not None and not history.empty:
         if price <= 0:
             price = safe_float(history["Close"].iloc[-1])
         if prev_close <= 0 and len(history) >= 2:
@@ -117,7 +125,7 @@ def catalyst(symbol: str) -> str:
     if not news:
         return "未找到明显新闻催化"
     title = news[0].get("title") or news[0].get("content", {}).get("title") or "有最新相关新闻"
-    return title[:140]
+    return title[:120]
 
 
 def direction(pct_change: float, rvol: float) -> str:
@@ -148,41 +156,112 @@ def grade(score: int) -> str:
     return "D"
 
 
+def build_reason(pct_change: float, rvol: float, direction_label: str, has_catalyst: bool) -> str:
+    parts = []
+    if abs(pct_change) >= 3:
+        parts.append("大幅跳空/异动")
+    elif abs(pct_change) >= 1:
+        parts.append("方向动能")
+    if rvol >= 0.15:
+        parts.append("成交量明显放大")
+    elif rvol >= 0.05:
+        parts.append("成交量活跃")
+    if has_catalyst:
+        parts.append("有新闻催化")
+    if direction_label == "Call":
+        parts.append("偏看涨")
+    elif direction_label == "Put":
+        parts.append("偏看跌")
+    if not parts:
+        parts.append("流动性观察")
+    return " + ".join(parts[:3])
+
+
 def analyze(symbol: str) -> Candidate | None:
     price, pct_change, avg_volume = price_snapshot(symbol)
     if price <= 0:
         return None
+
     rvol = relative_volume(symbol, avg_volume)
     headline = catalyst(symbol)
+    has_catalyst = headline != "未找到明显新闻催化"
     score = min(45, int(abs(pct_change) * 7)) + min(40, int(rvol * 180))
-    if headline != "未找到明显新闻催化":
+    if has_catalyst:
         score += 15
     score = min(score, 100)
-    return Candidate(symbol, price, pct_change, rvol, headline, risk(pct_change, rvol), direction(pct_change, rvol), grade(score), score)
+    dir_label = direction(pct_change, rvol)
+
+    return Candidate(
+        ticker=symbol,
+        price=price,
+        pct_change=pct_change,
+        rvol=rvol,
+        catalyst=headline,
+        risk=risk(pct_change, rvol),
+        direction=dir_label,
+        grade=grade(score),
+        score=score,
+        reason=build_reason(pct_change, rvol, dir_label, has_catalyst),
+    )
 
 
-def format_message(candidates: list[Candidate]) -> str:
-    now = dt.datetime.now(PACIFIC).strftime("%Y-%m-%d %I:%M %p PT")
-    lines = [
-        "**每日短线期权观察名单**",
-        f"`{now}`",
-        "",
-        "仅供盘中/短线期权观察使用，不构成投资建议，不自动交易，不下单。",
+def analyze_many(tickers: list[str]) -> list[Candidate]:
+    candidates = []
+    for symbol in tickers:
+        try:
+            candidate = analyze(symbol)
+            if candidate:
+                candidates.append(candidate)
+        except Exception as exc:
+            print(f"{symbol}: {exc}", file=sys.stderr)
+    return candidates
+
+
+def section_header(title: str, subtitle: str) -> list[str]:
+    bar = "════════════════════"
+    return [bar, title, subtitle, bar, ""]
+
+
+def format_candidate(item: Candidate, prefix: str = "") -> list[str]:
+    direction_labels = {"Call": "Call", "Put": "Put", "Watch": "Watch"}
+    direction_icons = {"Call": "🟢", "Put": "🔴", "Watch": "🟡"}
+    risk_labels = {"High": "高", "Medium": "中", "Low": "低"}
+    label = f"{prefix}{item.ticker}" if prefix else item.ticker
+    return [
+        f"{direction_icons[item.direction]} **{label} | {item.grade} | {direction_labels[item.direction]} | 0DTE: {item.score}/100**",
+        f"价格: `${item.price:.2f}` | 涨跌: `{fmt_pct(item.pct_change)}`",
+        f"RVOL: `{item.rvol:.2f}` | 风险: `{risk_labels[item.risk]}`",
+        f"原因: {item.reason}",
         "",
     ]
-    if not candidates:
-        lines.append("今天暂时没有筛选出强候选标的。")
-        return "\n".join(lines)
 
-    direction_labels = {"Call": "看涨 / Call", "Put": "看跌 / Put", "Watch": "观察 / Watch"}
-    risk_labels = {"High": "高", "Medium": "中", "Low": "低"}
-    for i, item in enumerate(candidates, 1):
-        lines += [
-            f"**{i}. {item.ticker} | 评级: {item.grade} | 方向: {direction_labels[item.direction]} | 风险: {risk_labels[item.risk]}**",
-            f"价格: `${item.price:.2f}` | 涨跌幅: `{fmt_pct(item.pct_change)}` | 相对成交量RVOL: `{item.rvol:.2f}`",
-            f"催化/新闻: {item.catalyst}",
-            "",
-        ]
+
+def format_message(fixed: list[Candidate], movers: list[Candidate]) -> str:
+    now = dt.datetime.now(PACIFIC).strftime("%I:%M %p PT")
+    lines = [
+        "📈 **Daily Options Watchlist**",
+        f"🕒 `{now}`",
+        "",
+        "仅供盘中/短线期权观察，不构成投资建议。",
+        "",
+    ]
+
+    lines += section_header("⭐ **FIXED WATCHLIST**", "重点关注")
+    if fixed:
+        for item in fixed:
+            lines += format_candidate(item)
+    else:
+        lines += ["固定观察名单暂时没有可用数据。", ""]
+
+    lines += section_header("🔥 **HIGH-VOLATILITY MOVERS**", "随机异动股")
+    if movers:
+        number_icons = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟"]
+        for index, item in enumerate(movers):
+            prefix = f"{number_icons[index]} " if index < len(number_icons) else f"{index + 1}. "
+            lines += format_candidate(item, prefix)
+    else:
+        lines += ["暂时没有发现额外高波动异动股。", ""]
+
     return "\n".join(lines).strip()
 
 
@@ -202,23 +281,19 @@ def main() -> int:
         print("今天不是美股交易日，跳过。")
         return 0
 
-    ticker_text = env("WATCHLIST_TICKERS", ",".join(DEFAULT_TICKERS))
-    tickers = [t.strip().upper() for t in ticker_text.split(",") if t.strip()]
-    max_results = safe_int(env("MAX_RESULTS", "8"), 8)
+    mover_text = env("WATCHLIST_TICKERS", ",".join(DEFAULT_MOVER_TICKERS))
+    mover_tickers = [t.strip().upper() for t in mover_text.split(",") if t.strip()]
+    fixed_set = set(FIXED_TICKERS)
+    mover_tickers = [t for t in mover_tickers if t not in fixed_set]
+    max_movers = safe_int(env("MAX_RESULTS", "8"), 8)
 
-    candidates = []
-    for symbol in tickers:
-        try:
-            candidate = analyze(symbol)
-            if candidate:
-                candidates.append(candidate)
-        except Exception as exc:
-            print(f"{symbol}: {exc}", file=sys.stderr)
+    fixed = analyze_many(FIXED_TICKERS)
+    movers = analyze_many(mover_tickers)
+    movers.sort(key=lambda c: (c.score, abs(c.pct_change), c.rvol), reverse=True)
+    movers = movers[:max_movers]
 
-    candidates.sort(key=lambda c: (c.score, abs(c.pct_change), c.rvol), reverse=True)
-    selected = candidates[:max_results]
-    post_discord(webhook_url, format_message(selected))
-    print(f"已发送 {len(selected)} 个候选标的: {', '.join(c.ticker for c in selected) or '无'}")
+    post_discord(webhook_url, format_message(fixed, movers))
+    print(f"已发送固定观察 {len(fixed)} 个，异动股 {len(movers)} 个。")
     return 0
 
 
