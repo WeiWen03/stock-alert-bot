@@ -40,7 +40,9 @@ class Candidate:
     direction: str
     grade: str
     score: int
-    reason: str
+    event: str
+    setup: str
+    news: str
 
 
 def env(name: str, default: str = "") -> str:
@@ -156,38 +158,40 @@ def grade(score: int) -> str:
     return "D"
 
 
-def build_reason(pct_change: float, rvol: float, direction_label: str, headline: str) -> str:
+def build_reason(pct_change: float, rvol: float, direction_label: str, headline: str) -> tuple[str, str, str]:
     if pct_change >= 3:
-        move_text = f"上涨{fmt_pct(pct_change)}，属于明显跳涨/强势异动"
+        event = f"价格上涨 {fmt_pct(pct_change)}，属于明显跳涨/强势异动"
     elif pct_change >= 1:
-        move_text = f"上涨{fmt_pct(pct_change)}，短线偏强"
+        event = f"价格上涨 {fmt_pct(pct_change)}，短线偏强"
     elif pct_change <= -3:
-        move_text = f"下跌{fmt_pct(pct_change)}，属于明显跳水/弱势异动"
+        event = f"价格下跌 {fmt_pct(pct_change)}，属于明显跳水/弱势异动"
     elif pct_change <= -1:
-        move_text = f"下跌{fmt_pct(pct_change)}，短线偏弱"
+        event = f"价格下跌 {fmt_pct(pct_change)}，短线偏弱"
     else:
-        move_text = f"涨跌幅{fmt_pct(pct_change)}，价格暂时没有明显单边方向"
+        event = f"价格涨跌幅 {fmt_pct(pct_change)}，暂时没有明显单边方向"
 
     if rvol >= 0.15:
-        volume_text = f"RVOL {rvol:.2f}，盘前/当日成交显著放大"
+        volume = f"RVOL {rvol:.2f}，盘前/当日成交显著放大"
     elif rvol >= 0.05:
-        volume_text = f"RVOL {rvol:.2f}，成交量比平时更活跃"
+        volume = f"RVOL {rvol:.2f}，成交量比平时更活跃"
     elif rvol > 0:
-        volume_text = f"RVOL {rvol:.2f}，成交量暂时一般"
+        volume = f"RVOL {rvol:.2f}，成交量暂时一般"
     else:
-        volume_text = "RVOL 暂无有效数据"
+        volume = "RVOL 暂无有效数据"
 
     if direction_label == "Call":
-        direction_text = "价格强于昨收且有成交配合，偏 Call 观察"
+        setup = f"{volume}；价格强于昨收且成交配合，偏 Call 观察"
     elif direction_label == "Put":
-        direction_text = "价格弱于昨收且有成交配合，偏 Put 观察"
+        setup = f"{volume}；价格弱于昨收且成交配合，偏 Put 观察"
     else:
-        direction_text = "方向还不够明确，先列入 Watch"
+        setup = f"{volume}；方向还不够明确，先列入 Watch"
 
     if headline != "未找到明显新闻催化":
-        news_text = f"新闻: {headline[:70]}"
-        return f"{move_text}；{volume_text}；{direction_text}；{news_text}"
-    return f"{move_text}；{volume_text}；{direction_text}；未发现明确新闻催化"
+        news = headline[:90]
+    else:
+        news = "未发现明确新闻催化"
+
+    return event, setup, news
 
 
 def analyze(symbol: str) -> Candidate | None:
@@ -197,11 +201,13 @@ def analyze(symbol: str) -> Candidate | None:
 
     rvol = relative_volume(symbol, avg_volume)
     headline = catalyst(symbol)
+    has_catalyst = headline != "未找到明显新闻催化"
     score = min(45, int(abs(pct_change) * 7)) + min(40, int(rvol * 180))
-    if headline != "未找到明显新闻催化":
+    if has_catalyst:
         score += 15
     score = min(score, 100)
     dir_label = direction(pct_change, rvol)
+    event, setup, news = build_reason(pct_change, rvol, dir_label, headline)
 
     return Candidate(
         ticker=symbol,
@@ -213,7 +219,9 @@ def analyze(symbol: str) -> Candidate | None:
         direction=dir_label,
         grade=grade(score),
         score=score,
-        reason=build_reason(pct_change, rvol, dir_label, headline),
+        event=event,
+        setup=setup,
+        news=news,
     )
 
 
@@ -243,7 +251,9 @@ def format_candidate(item: Candidate, prefix: str = "") -> list[str]:
         f"{direction_icons[item.direction]} **{label} | {item.grade} | {direction_labels[item.direction]} | 0DTE: {item.score}/100**",
         f"价格: `${item.price:.2f}` | 涨跌: `{fmt_pct(item.pct_change)}`",
         f"RVOL: `{item.rvol:.2f}` | 风险: `{risk_labels[item.risk]}`",
-        f"原因: {item.reason}",
+        f"发生: {item.event}",
+        f"判断: {item.setup}",
+        f"新闻: {item.news}",
         "",
     ]
 
@@ -253,6 +263,7 @@ def format_message(fixed: list[Candidate], movers: list[Candidate]) -> str:
     lines = [
         "📈 **Daily Options Watchlist**",
         f"🕒 `{now}`",
+        "`格式版本: reason-v2`",
         "",
         "仅供盘中/短线期权观察，不构成投资建议。",
         "",
