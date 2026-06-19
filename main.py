@@ -40,7 +40,17 @@ class Candidate:
 
 
 def env(name: str, default: str = "") -> str:
-    return os.getenv(name, default).strip()
+    value = os.getenv(name)
+    if value is None or not value.strip():
+        return default
+    return value.strip()
+
+
+def safe_int(value: str, default: int) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
 
 
 def safe_float(value: Any, default: float = 0.0) -> float:
@@ -191,8 +201,9 @@ def main() -> int:
         print("Not a U.S. trading day. Skipping.")
         return 0
 
-    tickers = [t.strip().upper() for t in env("WATCHLIST_TICKERS", ",".join(DEFAULT_TICKERS)).split(",") if t.strip()]
-    max_results = int(env("MAX_RESULTS", "8"))
+    ticker_text = env("WATCHLIST_TICKERS", ",".join(DEFAULT_TICKERS))
+    tickers = [t.strip().upper() for t in ticker_text.split(",") if t.strip()]
+    max_results = safe_int(env("MAX_RESULTS", "8"), 8)
 
     candidates = []
     for symbol in tickers:
