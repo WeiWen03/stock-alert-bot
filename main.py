@@ -288,10 +288,35 @@ def format_message(fixed: list[Candidate], movers: list[Candidate]) -> str:
     return "\n".join(lines).strip()
 
 
+def split_discord_message(content: str, limit: int = 1800) -> list[str]:
+    chunks = []
+    current = ""
+    for line in content.splitlines():
+        addition = line + "\n"
+        if len(current) + len(addition) > limit:
+            if current.strip():
+                chunks.append(current.strip())
+            current = addition
+        else:
+            current += addition
+    if current.strip():
+        chunks.append(current.strip())
+    return chunks
+
+
 def post_discord(webhook_url: str, content: str) -> None:
     response = requests.post(webhook_url, json={"content": content}, timeout=30)
     if response.status_code >= 300:
         raise RuntimeError(f"Discord webhook failed: {response.status_code} {response.text}")
+
+
+def post_discord_message(webhook_url: str, content: str) -> None:
+    chunks = split_discord_message(content)
+    total = len(chunks)
+    for index, chunk in enumerate(chunks, 1):
+        if total > 1:
+            chunk = f"{chunk}\n\n`第 {index}/{total} 段`"
+        post_discord(webhook_url, chunk)
 
 
 def main() -> int:
@@ -315,7 +340,7 @@ def main() -> int:
     movers.sort(key=lambda c: (c.score, abs(c.pct_change), c.rvol), reverse=True)
     movers = movers[:max_movers]
 
-    post_discord(webhook_url, format_message(fixed, movers))
+    post_discord_message(webhook_url, format_message(fixed, movers))
     print(f"已发送固定观察 {len(fixed)} 个，异动股 {len(movers)} 个。")
     return 0
 
