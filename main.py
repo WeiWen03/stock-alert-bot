@@ -156,25 +156,38 @@ def grade(score: int) -> str:
     return "D"
 
 
-def build_reason(pct_change: float, rvol: float, direction_label: str, has_catalyst: bool) -> str:
-    parts = []
-    if abs(pct_change) >= 3:
-        parts.append("大幅跳空/异动")
-    elif abs(pct_change) >= 1:
-        parts.append("方向动能")
+def build_reason(pct_change: float, rvol: float, direction_label: str, headline: str) -> str:
+    if pct_change >= 3:
+        move_text = f"上涨{fmt_pct(pct_change)}，属于明显跳涨/强势异动"
+    elif pct_change >= 1:
+        move_text = f"上涨{fmt_pct(pct_change)}，短线偏强"
+    elif pct_change <= -3:
+        move_text = f"下跌{fmt_pct(pct_change)}，属于明显跳水/弱势异动"
+    elif pct_change <= -1:
+        move_text = f"下跌{fmt_pct(pct_change)}，短线偏弱"
+    else:
+        move_text = f"涨跌幅{fmt_pct(pct_change)}，价格暂时没有明显单边方向"
+
     if rvol >= 0.15:
-        parts.append("成交量明显放大")
+        volume_text = f"RVOL {rvol:.2f}，盘前/当日成交显著放大"
     elif rvol >= 0.05:
-        parts.append("成交量活跃")
-    if has_catalyst:
-        parts.append("有新闻催化")
+        volume_text = f"RVOL {rvol:.2f}，成交量比平时更活跃"
+    elif rvol > 0:
+        volume_text = f"RVOL {rvol:.2f}，成交量暂时一般"
+    else:
+        volume_text = "RVOL 暂无有效数据"
+
     if direction_label == "Call":
-        parts.append("偏看涨")
+        direction_text = "价格强于昨收且有成交配合，偏 Call 观察"
     elif direction_label == "Put":
-        parts.append("偏看跌")
-    if not parts:
-        parts.append("流动性观察")
-    return " + ".join(parts[:3])
+        direction_text = "价格弱于昨收且有成交配合，偏 Put 观察"
+    else:
+        direction_text = "方向还不够明确，先列入 Watch"
+
+    if headline != "未找到明显新闻催化":
+        news_text = f"新闻: {headline[:70]}"
+        return f"{move_text}；{volume_text}；{direction_text}；{news_text}"
+    return f"{move_text}；{volume_text}；{direction_text}；未发现明确新闻催化"
 
 
 def analyze(symbol: str) -> Candidate | None:
@@ -184,9 +197,8 @@ def analyze(symbol: str) -> Candidate | None:
 
     rvol = relative_volume(symbol, avg_volume)
     headline = catalyst(symbol)
-    has_catalyst = headline != "未找到明显新闻催化"
     score = min(45, int(abs(pct_change) * 7)) + min(40, int(rvol * 180))
-    if has_catalyst:
+    if headline != "未找到明显新闻催化":
         score += 15
     score = min(score, 100)
     dir_label = direction(pct_change, rvol)
@@ -201,7 +213,7 @@ def analyze(symbol: str) -> Candidate | None:
         direction=dir_label,
         grade=grade(score),
         score=score,
-        reason=build_reason(pct_change, rvol, dir_label, has_catalyst),
+        reason=build_reason(pct_change, rvol, dir_label, headline),
     )
 
 
