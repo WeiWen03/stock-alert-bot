@@ -2,39 +2,86 @@ name: Daily Options Watchlist
 
 on:
   schedule:
-    - cron: "30 13 * * 1-5"
-    - cron: "30 14 * * 1-5"
+    # GitHub schedules can be delayed or occasionally miss a single run.
+    # Poll every 15 minutes, then use Pacific time and a daily cache marker.
+    - cron: "*/15 13-17 * * 1-5"
   workflow_dispatch:
+
+concurrency:
+  group: daily-options-watchlist
+  cancel-in-progress: false
 
 jobs:
   send-watchlist:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
 
-      - name: Stop duplicate scheduled run unless it is 6 AM Pacific
-        if: github.event_name == 'schedule'
+      - name: Check Pacific time window
+        id: clock
+        shell: bash
         run: |
+          PT_DATE="$(TZ=America/Los_Angeles date +%F)"
           PT_HOUR="$(TZ=America/Los_Angeles date +%H)"
-          if [ "$PT_HOUR" != "06" ]; then
-            echo "Skipping duplicate daylight/standard-time schedule."
-            exit 0
+          PT_MINUTE="$(TZ=America/Los_Angeles date +%M)"
+          PT_MINUTES=$((10#$PT_HOUR * 60 + 10#$PT_MINUTE))
+          SHOULD_RUN="false"
+
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            SHOULD_RUN="true"
+          elif [ "$PT_MINUTES" -ge 390 ] && [ "$PT_MINUTES" -le 600 ]; then
+            SHOULD_RUN="true"
           fi
 
+          echo "pt_date=$PT_DATE" >> "$GITHUB_OUTPUT"
+          echo "should_run=$SHOULD_RUN" >> "$GITHUB_OUTPUT"
+          echo "Pacific time: $PT_DATE $PT_HOUR:$PT_MINUTE; should_run=$SHOULD_RUN"
+
+      - name: Restore today's sent marker
+        id: sent_today
+        if: github.event_name == 'schedule' && steps.clock.outputs.should_run == 'true'
+        uses: actions/cache/restore@v4
+        with:
+          path: .watchlist-sent
+          key: daily-options-watchlist-${{ steps.clock.outputs.pt_date }}
+
+      - name: Explain skipped run
+        if: github.event_name == 'schedule' && (steps.clock.outputs.should_run != 'true' || steps.sent_today.outputs.cache-hit == 'true')
+        run: |
+          echo "Skipping: outside the 6:30-10:00 AM Pacific recovery window, or today's watchlist was already sent."
+
       - name: Set up Python
+        if: github.event_name == 'workflow_dispatch' || (steps.clock.outputs.should_run == 'true' && steps.sent_today.outputs.cache-hit != 'true')
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
       - name: Install dependencies
+        if: github.event_name == 'workflow_dispatch' || (steps.clock.outputs.should_run == 'true' && steps.sent_today.outputs.cache-hit != 'true')
         run: python -m pip install -r requirements.txt
 
       - name: Send watchlist to Discord
+        id: send_watchlist
+        if: github.event_name == 'workflow_dispatch' || (steps.clock.outputs.should_run == 'true' && steps.sent_today.outputs.cache-hit != 'true')
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           WATCHLIST_TICKERS: ${{ vars.WATCHLIST_TICKERS }}
           MAX_RESULTS: ${{ vars.MAX_RESULTS }}
           SKIP_TRADING_DAY_CHECK: "false"
         run: python main.py
+
+      - name: Create today's sent marker
+        if: success() && github.event_name == 'schedule' && steps.clock.outputs.should_run == 'true' && steps.sent_today.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p .watchlist-sent
+          echo "${{ steps.clock.outputs.pt_date }}" > .watchlist-sent/date.txt
+
+      - name: Save today's sent marker
+        if: success() && github.event_name == 'schedule' && steps.clock.outputs.should_run == 'true' && steps.sent_today.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: .watchlist-sent
+          key: daily-options-watchlist-${{ steps.clock.outputs.pt_date }}
