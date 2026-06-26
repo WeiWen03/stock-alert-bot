@@ -2,9 +2,9 @@ name: Daily Options Watchlist
 
 on:
   schedule:
-    # GitHub schedules can be delayed or occasionally miss a single run.
-    # Poll every 15 minutes, then use Pacific time and a daily cache marker.
-    - cron: "*/15 13-17 * * 1-5"
+    # GitHub schedules can be delayed, so poll frequently around the target time.
+    # The Pacific-time gate below keeps the real send window at 6:25-7:30 AM PT.
+    - cron: "*/5 13-15 * * 1-5"
   workflow_dispatch:
 
 concurrency:
@@ -32,7 +32,7 @@ jobs:
 
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             SHOULD_RUN="true"
-          elif [ "$PT_MINUTES" -ge 390 ] && [ "$PT_MINUTES" -le 600 ]; then
+          elif [ "$PT_MINUTES" -ge 385 ] && [ "$PT_MINUTES" -le 450 ]; then
             SHOULD_RUN="true"
           fi
 
@@ -51,7 +51,7 @@ jobs:
       - name: Explain skipped run
         if: github.event_name == 'schedule' && (steps.clock.outputs.should_run != 'true' || steps.sent_today.outputs.cache-hit == 'true')
         run: |
-          echo "Skipping: outside the 6:30-10:00 AM Pacific recovery window, or today's watchlist was already sent."
+          echo "Skipping: outside the 6:25-7:30 AM Pacific delivery window, or today's watchlist was already sent."
 
       - name: Set up Python
         if: github.event_name == 'workflow_dispatch' || (steps.clock.outputs.should_run == 'true' && steps.sent_today.outputs.cache-hit != 'true')
